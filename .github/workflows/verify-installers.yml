@@ -4,7 +4,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # Draft release assets are only visible to tokens with repository write access.
+  contents: write
 
 jobs:
   verify:
