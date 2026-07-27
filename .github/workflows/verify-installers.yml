@@ -1,0 +1,96 @@
+name: Verify Windows installers
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Download draft release assets
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path artifacts | Out-Null
+          gh release download euclid-bridge-2026-06-13 `
+            --repo $env:GITHUB_REPOSITORY `
+            --pattern '*.exe' `
+            --dir artifacts
+
+      - name: Verify fingerprints, sizes, and publisher signatures
+        shell: pwsh
+        run: |
+          $expected = @{
+            'EuclidBridgeDesktopAgentSetup.exe' = @{
+              Hash = '837296c45186a4cd47c5d5c14b28c60d4b8e775e4043d47067aecf3c850e8aab'
+              Size = 144762536
+            }
+            'EuclidBridgeNetworkAgentSetup.exe' = @{
+              Hash = '1c94bb3408c6301692f57fe74b0c9f897475a185fb6bf828fa9eb2a3dfccd81f'
+              Size = 144761904
+            }
+          }
+
+          foreach ($name in $expected.Keys) {
+            $path = Join-Path artifacts $name
+            $file = Get-Item -LiteralPath $path
+            $hash = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
+            $signature = Get-AuthenticodeSignature -LiteralPath $path
+
+            Write-Host "$name"
+            Write-Host "  Size: $($file.Length)"
+            Write-Host "  SHA-256: $hash"
+            Write-Host "  Signature: $($signature.Status)"
+            Write-Host "  Publisher: $($signature.SignerCertificate.Subject)"
+
+            if ($file.Length -ne $expected[$name].Size) {
+              throw "$name has an unexpected file size."
+            }
+            if ($hash -ne $expected[$name].Hash) {
+              throw "$name has an unexpected SHA-256 fingerprint."
+            }
+            if ($signature.Status -ne 'Valid') {
+              throw "$name does not have a valid Windows Authenticode signature."
+            }
+            if ($signature.SignerCertificate.Subject -notmatch 'O=Epoch UX LLC') {
+              throw "$name was not signed by Epoch UX LLC."
+            }
+          }
+
+      - name: Install Desktop Agent and verify its service
+        shell: pwsh
+        run: |
+          $process = Start-Process `
+            -FilePath (Resolve-Path 'artifacts/EuclidBridgeDesktopAgentSetup.exe') `
+            -ArgumentList '/S' `
+            -Wait `
+            -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Desktop Agent installer exited with code $($process.ExitCode)."
+          }
+          $service = Get-Service -Name EuclidBridge -ErrorAction Stop
+          if ($service.Status -ne 'Running') {
+            throw "Desktop Agent service is not running after installation."
+          }
+
+      - name: Install Network Agent and verify its service
+        shell: pwsh
+        run: |
+          $process = Start-Process `
+            -FilePath (Resolve-Path 'artifacts/EuclidBridgeNetworkAgentSetup.exe') `
+            -ArgumentList '/S' `
+            -Wait `
+            -PassThru
+          if ($process.ExitCode -ne 0) {
+            throw "Network Agent installer exited with code $($process.ExitCode)."
+          }
+          $service = Get-Service -Name EuclidBridge -ErrorAction Stop
+          if ($service.Status -ne 'Running') {
+            throw "Network Agent service is not running after installation."
+          }
