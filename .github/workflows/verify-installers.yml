@@ -89,6 +89,8 @@ jobs:
           }
 
       - name: Install Desktop Agent and verify its service
+        id: desktop_install
+        continue-on-error: true
         shell: pwsh
         run: |
           $process = Start-Process `
@@ -99,12 +101,31 @@ jobs:
           if ($process.ExitCode -ne 0) {
             throw "Desktop Agent installer exited with code $($process.ExitCode)."
           }
-          $service = Get-Service -Name EuclidBridge -ErrorAction Stop
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+            $service = Get-Service -Name EuclidBridge -ErrorAction Stop
+            if ($service.Status -eq 'Running') {
+              break
+            }
+            Start-Sleep -Seconds 5
+          }
           if ($service.Status -ne 'Running') {
+            Get-CimInstance Win32_Service -Filter "Name='EuclidBridge'" | Format-List *
+            Get-WinEvent -FilterHashtable @{
+              LogName = 'System'
+              ProviderName = 'Service Control Manager'
+              StartTime = (Get-Date).AddMinutes(-10)
+            } -ErrorAction SilentlyContinue | Select-Object -First 20 | Format-List *
+            Get-ChildItem `
+              'C:\Program Files\EuclidBridgeDesktopAgent', `
+              'C:\Windows\System32\config\systemprofile\AppData\Roaming\euclid-ops-desktop' `
+              -Recurse `
+              -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime
             throw "Desktop Agent service is not running after installation."
           }
 
       - name: Install Network Agent and verify its service
+        id: network_install
+        continue-on-error: true
         shell: pwsh
         run: |
           $process = Start-Process `
@@ -115,7 +136,38 @@ jobs:
           if ($process.ExitCode -ne 0) {
             throw "Network Agent installer exited with code $($process.ExitCode)."
           }
-          $service = Get-Service -Name EuclidBridge -ErrorAction Stop
+          for ($attempt = 1; $attempt -le 12; $attempt++) {
+            $service = Get-Service -Name EuclidBridge -ErrorAction Stop
+            if ($service.Status -eq 'Running') {
+              break
+            }
+            Start-Sleep -Seconds 5
+          }
           if ($service.Status -ne 'Running') {
+            Get-CimInstance Win32_Service -Filter "Name='EuclidBridge'" | Format-List *
+            Get-WinEvent -FilterHashtable @{
+              LogName = 'System'
+              ProviderName = 'Service Control Manager'
+              StartTime = (Get-Date).AddMinutes(-10)
+            } -ErrorAction SilentlyContinue | Select-Object -First 20 | Format-List *
+            Get-ChildItem `
+              'C:\Program Files\Euclid Bridge Network Agent', `
+              'C:\ProgramData\EuclidBridge\NetworkAgent' `
+              -Recurse `
+              -ErrorAction SilentlyContinue | Select-Object FullName, Length, LastWriteTime
             throw "Network Agent service is not running after installation."
+          }
+
+      - name: Require both installation checks to pass
+        if: always()
+        shell: pwsh
+        env:
+          DESKTOP_OUTCOME: ${{ steps.desktop_install.outcome }}
+          NETWORK_OUTCOME: ${{ steps.network_install.outcome }}
+        run: |
+          if ($env:DESKTOP_OUTCOME -ne 'success') {
+            throw 'Desktop Agent installation verification failed.'
+          }
+          if ($env:NETWORK_OUTCOME -ne 'success') {
+            throw 'Network Agent installation verification failed.'
           }
