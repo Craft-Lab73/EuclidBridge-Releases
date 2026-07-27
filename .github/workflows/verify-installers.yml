@@ -18,10 +18,34 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path artifacts | Out-Null
-          gh release download euclid-bridge-2026-06-13 `
-            --repo $env:GITHUB_REPOSITORY `
-            --pattern '*.exe' `
-            --dir artifacts
+          $headers = @{
+            Authorization = "Bearer $env:GH_TOKEN"
+            Accept = 'application/vnd.github+json'
+            'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $releases = Invoke-RestMethod `
+            -Headers $headers `
+            -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases"
+          $release = $releases | Where-Object {
+            $_.tag_name -eq 'euclid-bridge-2026-06-13'
+          } | Select-Object -First 1
+          if (-not $release) {
+            throw 'Draft installer release was not found.'
+          }
+          foreach ($asset in $release.assets) {
+            if ($asset.name -notlike '*.exe') {
+              continue
+            }
+            $downloadHeaders = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/octet-stream'
+              'X-GitHub-Api-Version' = '2022-11-28'
+            }
+            Invoke-WebRequest `
+              -Headers $downloadHeaders `
+              -Uri $asset.url `
+              -OutFile (Join-Path artifacts $asset.name)
+          }
 
       - name: Verify fingerprints, sizes, and publisher signatures
         shell: pwsh
